@@ -163,6 +163,7 @@ void pm8xxx_led_current_set_for_key(int brightness_key)
 
 	}
 }
+struct pm8xxx_led_data *led_data_buttons = 0;
 struct led_classdev *led_cdev_buttons = 0;
 static int buttons_led_is_blinking = 0;
 static int buttons_led_is_on = 0;
@@ -175,7 +176,8 @@ static void pm8xxx_led_current_set_flagged(struct led_classdev *led_cdev, enum l
 
 	int *pduties;
 
-	LED_INFO("%s, bank:%d, brightness:%d\n", __func__, led->bank, brightness);
+	LED_INFO("%s, bank:%d, brightness:%d blink:%d \n", __func__, led->bank, brightness, blink);
+	printk("[BB] pm8xxx_led_current_set_flagged -- bank:%d, brightness:%d blink:%d \n", led->bank, brightness, blink);
 	cancel_delayed_work_sync(&led->fade_delayed_work);
 	virtual_key_state = brightness;
 	if (flag_hold_virtual_key == 1) {
@@ -194,6 +196,7 @@ static void pm8xxx_led_current_set_flagged(struct led_classdev *led_cdev, enum l
 
 		if (led->function_flags & LED_BRETH_FUNCTION) {
 			if (blink == 0) {
+				printk("[BB] NON BLINK BRETH ON !\n");
 				buttons_led_is_on = 1;
 				// no blink needed
 				pduties = &dutys_array[0];
@@ -206,6 +209,10 @@ static void pm8xxx_led_current_set_flagged(struct led_classdev *led_cdev, enum l
 							0, 0,
 							led->lut_flag);
 			} else {
+				led->out_current = 4;
+				led->cdev.brightness_set(led_cdev, 0);
+				led->cdev.brightness_set(led_cdev, 255);
+				printk("[BB] -- BLINK BRETH ON !\n");
 				pduties = &dutys_array[0];
 				// LUT_LOOP for blinking
 				pm8xxx_pwm_lut_config(led->pwm_led,
@@ -225,6 +232,7 @@ static void pm8xxx_led_current_set_flagged(struct led_classdev *led_cdev, enum l
 		}
 	} else {
 		if (led->function_flags & LED_BRETH_FUNCTION) {
+			printk("[BB] NON BLINK BRETH OFF.\n");
 			buttons_led_is_on = 0;
 			wake_lock_timeout(&pmic_led_wake_lock, HZ*2);
 			pduties = &dutys_array[8];
@@ -279,17 +287,18 @@ static int green_blink_value = 0;
 static void pm8xxx_buttons_blink(int on)
 {
 	if (on > 0) {
-		printk("[BB] blink on  screen: %d j: %lu \n", touchscreen_is_on(), jiffies);
+		printk("[BB] blink on --  screen: %d buttons_led_is_on: %d -- jiffies: %lu \n", touchscreen_is_on(), buttons_led_is_on, jiffies);
 		if (buttons_led_is_on == 1) return; // already lit, dont blink
 		if (touchscreen_is_on() == 1) return; // touchscreen is on, dont blink
 		buttons_led_is_blinking = 1;
 		// start blinking (brightness = 1, blink flag needed = 1)
-		pm8xxx_led_current_set_flagged(led_cdev_buttons, 1, 1);
+		pm8xxx_led_current_set_flagged(led_cdev_buttons, 255, 1);
 	} else {
 		// one of the leds still blinking?
 		if (amber_blink_value == 1 || green_blink_value == 1) return; // yes, don't stop blinking
 
-		printk("[BB] blink off  screen: %d j: %lu \n", touchscreen_is_on(), jiffies);
+		printk("[BB] blink off --  screen: %d buttons_led_is_on: %d -- jiffies: %lu \n", touchscreen_is_on(), buttons_led_is_on, jiffies);
+//		printk("[BB] blink off  screen: %d j: %lu \n", touchscreen_is_on(), jiffies);
 		if (buttons_led_is_blinking == 0) return;
 		buttons_led_is_blinking = 0;
 		if (touchscreen_is_on() == 1 && buttons_turning_on_with_screen_on == 1) return; // touchscreen is on, button light already override the blinking, dont turn off
@@ -633,6 +642,14 @@ static ssize_t pm8xxx_led_blink_store(struct device *dev,
 		}
 		queue_delayed_work(g_led_work_queue, &ldata->blink_delayed_work,
 				   msecs_to_jiffies(310));
+		if (blink_buttons > 0 && val > 0) {
+			if (led_is_green == 1) {
+				green_blink_value = 1;
+			} else {
+				amber_blink_value = 1;
+			}
+			pm8xxx_buttons_blink(1);
+		}
 		break;
 	case BLINK_64MS_ON_2SEC_PER_2SEC:
 		cancel_delayed_work_sync(&ldata->blink_delayed_work);
@@ -654,6 +671,14 @@ static ssize_t pm8xxx_led_blink_store(struct device *dev,
 		}
 		queue_delayed_work(g_led_work_queue, &ldata->blink_delayed_work,
 				   msecs_to_jiffies(1000));
+		if (blink_buttons > 0 && val > 0) {
+			if (led_is_green == 1) {
+				green_blink_value = 1;
+			} else {
+				amber_blink_value = 1;
+			}
+			pm8xxx_buttons_blink(1);
+		}
 		break;
 	case BLINK_1SEC_PER_2SEC:
 		pwm_disable(ldata->pwm_led);
@@ -671,6 +696,14 @@ static ssize_t pm8xxx_led_blink_store(struct device *dev,
 				pwm_config(amber_back_led_data->pwm_led, 1000000, 2000000);
 				pwm_enable(amber_back_led_data->pwm_led);
 			}
+		}
+		if (blink_buttons > 0 && val > 0) {
+			if (led_is_green == 1) {
+				green_blink_value = 1;
+			} else {
+				amber_blink_value = 1;
+			}
+			pm8xxx_buttons_blink(1);
 		}
 		break;
 	default:
