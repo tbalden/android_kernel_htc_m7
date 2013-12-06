@@ -34,6 +34,7 @@
 #ifdef CONFIG_HAS_EARLYSUSPEND
 #include <linux/earlysuspend.h>
 #endif
+#include <linux/wakelock.h>
 
 #include <linux/bma250.h>
 #define D(x...) printk(KERN_DEBUG "[GSNR][BMA250_BOSCH] " x)
@@ -62,6 +63,7 @@ struct bma250_data {
 	struct mutex value_mutex;
 	struct mutex enable_mutex;
 	struct mutex mode_mutex;
+	struct mutex sig_mo_mutex;
 	struct delayed_work work;
 	struct work_struct irq_work;
 #ifdef CONFIG_HAS_EARLYSUSPEND
@@ -76,6 +78,12 @@ struct bma250_data {
 
 	struct bma250_platform_data *pdata;
 	short offset_buf[3];
+#ifdef CONFIG_SIG_MOTION
+	struct input_dev *input_sig_motion;
+	atomic_t en_sig_motion;
+	int ref_count;
+	struct wake_lock sig_wake_lock;
+#endif
 };
 
 struct bma250_data *gdata;
@@ -2515,6 +2523,123 @@ static ssize_t bma250_enable_store(struct device *dev,
 	return count;
 }
 
+static ssize_t bma250_en_sig_motion_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct bma250_data *bma250 = i2c_get_clientdata(client);
+
+	return sprintf(buf, "%d\n", atomic_read(&bma250->en_sig_motion));
+
+}
+
+
+#if 0
+static int bma250_set_en_slope_int(struct bma250_data *bma250,
+		int en)
+{
+	int err = 0;
+	struct i2c_client *client = bma250->bma250_client;
+
+	if (client == NULL) {
+		E("%s: client == NULL!!", __func__);
+		return -1;
+	}
+	if (en) {
+		err = bma250_set_slope_duration(client, 0x03);
+		if (err)
+			E("%s: bma250_set_slope_duration() fails!\n", __func__);
+
+		err = bma250_set_slope_threshold(client, 0x28);
+		if (err)
+			E("%s: bma250_set_slope_threshold() fails!\n", __func__);
+
+		
+		err = bma250_set_Int_Enable(client, 5, 1);
+		if (err)
+			E("%s: bma250_set_Int_Enable(5, 1) fails!\n", __func__);
+
+		err = bma250_set_Int_Enable(client, 6, 1);
+		if (err)
+			E("%s: bma250_set_Int_Enable(6, 1) fails!\n", __func__);
+
+		err = bma250_set_Int_Enable(client, 7, 1);
+		if (err)
+			E("%s: bma250_set_Int_Enable(7, 1) fails!\n", __func__);
+
+		err = bma250_set_int1_pad_sel(client, PAD_SLOP);
+		if (err)
+			E("%s: bma250_set_int1_pad_sel() fails!\n", __func__);
+	} else {
+		err = bma250_set_Int_Enable(client, 5, 0);
+		if (err)
+			E("%s: bma250_set_Int_Enable(5, 0) fails!\n", __func__);
+
+		err = bma250_set_Int_Enable(client, 6, 0);
+		if (err)
+			E("%s: bma250_set_Int_Enable(6, 0) fails!\n", __func__);
+
+		err = bma250_set_Int_Enable(client, 7, 0);
+		if (err)
+			E("%s: bma250_set_Int_Enable(7, 0) fails!\n", __func__);
+	}
+	return err;
+}
+#endif
+
+#if 0
+static int bma250_set_en_sig_motion(struct bma250_data *bma250,
+		int en)
+{
+	int err = 0;
+
+	mutex_lock(&bma250->sig_mo_mutex);
+	I("%s++: en = %d, mutex locked\n", __func__, en);
+
+	if (en) {
+		bma250_set_mode(bma250->bma250_client,
+				bma250_MODE_NORMAL);
+		bma250_set_en_slope_int(bma250, en);
+	} else {
+		bma250_set_en_slope_int(bma250, en);
+		bma250_set_mode(bma250->bma250_client,
+				BMA250_MODE_SUSPEND);
+	}
+
+	mutex_unlock(&bma250->sig_mo_mutex);
+	I("%s--: mutex unlocked\n", __func__);
+	return err;
+}
+#endif
+
+
+static ssize_t bma250_en_sig_motion_store(struct device *dev,
+		struct device_attribute *attr,
+		const char *buf, size_t count)
+{
+#if 0
+	unsigned long data;
+	int error = 0;
+	
+	struct i2c_client *client = to_i2c_client(dev);
+	struct bma250_data *bma250 = i2c_get_clientdata(client);
+
+	error = strict_strtoul(buf, 10, &data);
+	if (error)
+		return error;
+
+	I("%s: data = %lu\n", __func__, data);
+
+	if ((data == 0) || (data == 1)) {
+		bma250_set_en_sig_motion(bma250, data);
+		atomic_set(&bma250->en_sig_motion, data);
+	}
+#endif
+	return count;
+}
+
+
+
 static ssize_t bma250_enable_int_store(struct device *dev,
 		struct device_attribute *attr,
 		const char *buf, size_t count)
@@ -3559,6 +3684,8 @@ static DEVICE_ATTR(enable_int, S_IWUSR|S_IWGRP|S_IWOTH,
 		NULL, bma250_enable_int_store);
 static DEVICE_ATTR(int_mode, S_IRUGO|S_IWUSR|S_IWGRP|S_IWOTH,
 		bma250_int_mode_show, bma250_int_mode_store);
+static DEVICE_ATTR(en_sig_motion, S_IRUGO|S_IWUSR|S_IWGRP|S_IWOTH,
+		bma250_en_sig_motion_show, bma250_en_sig_motion_store);
 static DEVICE_ATTR(slope_duration, S_IRUGO|S_IWUSR|S_IWGRP|S_IWOTH,
 		bma250_slope_duration_show, bma250_slope_duration_store);
 static DEVICE_ATTR(slope_threshold, S_IRUGO|S_IWUSR|S_IWGRP|S_IWOTH,
@@ -3627,6 +3754,7 @@ static struct attribute *bma250_attributes[] = {
 	&dev_attr_enable.attr,
 	&dev_attr_enable_int.attr,
 	&dev_attr_int_mode.attr,
+	&dev_attr_en_sig_motion.attr,
 	&dev_attr_slope_duration.attr,
 	&dev_attr_slope_threshold.attr,
 	&dev_attr_high_g_duration.attr,
@@ -3767,6 +3895,7 @@ static int bma250_probe(struct i2c_client *client,
 	unsigned char tempvalue;
 	struct bma250_data *data;
 	struct input_dev *dev;
+	struct input_dev *dev_sig_motion;
 #ifdef CONFIG_CIR_ALWAYS_READY
 	struct input_dev *dev_cir;
 	struct class *bma250_powerkey_class = NULL;
@@ -3874,6 +4003,16 @@ static int bma250_probe(struct i2c_client *client,
 	    return -ENOMEM;
 	}
 #endif
+
+#ifdef CONFIG_SIG_MOTION
+	dev_sig_motion = input_allocate_device();
+	if (!dev_sig_motion) {
+	    kfree(data);
+	    input_free_device(dev_sig_motion);
+	    return -ENOMEM;
+	}
+#endif
+
 	dev->name = SENSOR_NAME;
 	dev->id.bustype = BUS_I2C;
 #ifdef CONFIG_CIR_ALWAYS_READY
@@ -3883,6 +4022,15 @@ static int bma250_probe(struct i2c_client *client,
 	input_set_capability(dev_cir, EV_REL, SLOP_INTERRUPT);
 	input_set_drvdata(dev_cir, data);
 #endif
+
+#ifdef CONFIG_SIG_MOTION
+	dev_sig_motion->name = "sig_motion";
+	dev_sig_motion->id.bustype = BUS_I2C;
+
+	input_set_capability(dev_sig_motion, EV_REL, SLOP_INTERRUPT);
+	input_set_drvdata(dev_sig_motion, data);
+#endif
+
 	input_set_capability(dev, EV_ABS, ORIENT_INTERRUPT);
 	input_set_capability(dev, EV_ABS, FLAT_INTERRUPT);
 	input_set_abs_params(dev, ABS_X, ABSMIN, ABSMAX, 0, 0);
@@ -3904,11 +4052,21 @@ static int bma250_probe(struct i2c_client *client,
 	}
 #endif
 
+#ifdef CONFIG_SIG_MOTION
+	err = input_register_device(dev_sig_motion);
+	if (err < 0) {
+	    goto err_register_input_device_sig_motion;
+	}
+#endif
+
 	data->input = dev;
 #ifdef CONFIG_CIR_ALWAYS_READY
 	data->input_cir = dev_cir;
 #endif
 
+#ifdef CONFIG_SIG_MOTION
+	data->input_sig_motion = dev_sig_motion;
+#endif
 #ifdef HTC_ATTR
 
 
@@ -3975,6 +4133,7 @@ static int bma250_probe(struct i2c_client *client,
 
 	mutex_init(&data->value_mutex);
 	mutex_init(&data->mode_mutex);
+	mutex_init(&data->sig_mo_mutex);
 	mutex_init(&data->enable_mutex);
 
 	I("%s: BMA250 BOSCH driver probe successful", __func__);
@@ -3990,12 +4149,19 @@ err_create_bma250_device_file:
 	class_destroy(bma250_powerkey_class);
 #endif
 err_create_class:
+#ifdef CONFIG_SIG_MOTION
+	input_unregister_device(data->input_sig_motion);
+err_register_input_device_sig_motion:
+#endif
 #ifdef CONFIG_CIR_ALWAYS_READY
 	input_unregister_device(data->input_cir);
 err_register_input_cir_device:
 #endif
 	input_unregister_device(data->input);
 err_register_input_device:
+#ifdef CONFIG_SIG_MOTION
+	input_free_device(dev_sig_motion);
+#endif
 #ifdef CONFIG_CIR_ALWAYS_READY
 	input_free_device(dev_cir);
 #endif
