@@ -1607,14 +1607,18 @@ static void flick_wake_detection_snap(s16 data_x, s16 data_y, s16 data_z)
 	last_y = data_y;
 }
 
+static unsigned int LAST_IRQ_DETECTION_T = 0;
+
 // used to react on snap in sleep mode, through IRQ work calling this
 static void flick_wake_detection_snap_irq(s16 data_x, s16 data_y, s16 data_z)
 {
 	if (jiffies - LAST_SLEEP_TRIGGER_T < ((1+FLICK_WAKE_MIN_SLEEP_TIME)*80) ) return;
 	if (touchscreen_is_on()==1) return;
+	if (jiffies - LAST_IRQ_DETECTION_T < 120) return; // too close to another irq wake done already
 	if (1) {
 			printk("BMA - =============== 3 FLICK SNAP DONE - POWER ON =====================\n");
 			flick2wake_pwrtrigger();
+			LAST_IRQ_DETECTION_T = jiffies;
 	}
 }
 
